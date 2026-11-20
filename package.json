@@ -1,0 +1,25 @@
+{
+  "name": "wanxiang-quiz",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["frontend", "backend"],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node --env-file-if-exists=.env scripts/start.mjs",
+    "start:frontend": "node --env-file-if-exists=.env frontend/server.mjs",
+    "start:backend": "node --env-file-if-exists=.env backend/server.mjs",
+    "issue": "node --env-file-if-exists=.env backend/issue.mjs",
+    "bank:export": "node --env-file-if-exists=.env scripts/banks.mjs export",
+    "bank:pack": "node --env-file-if-exists=.env scripts/banks.mjs pack",
+    "test": "node --env-file-if-exists=.env --test backend/test/*.test.mjs",
+    "build:frontend": "node frontend/build.mjs",
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

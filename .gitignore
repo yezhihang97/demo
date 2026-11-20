@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+backend/data/
+backend/content-work/
+backend/content/*.json
+!backend/content/*.enc.json
+backend/content/*.tmp
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.sites-archive/
+.sites-checkout*/
+.sites-runtime/
+*.log

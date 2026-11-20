@@ -1,0 +1,13 @@
+{
+  "name": "@wanxiang/frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node build.mjs",
+    "start": "node --env-file-if-exists=../.env server.mjs"
+  },
+  "dependencies": { "vue": "^3.5.0" },
+  "devDependencies": { "vite": "^7.3.0", "@vitejs/plugin-vue": "^6.0.0" }
+}
