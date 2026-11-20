@@ -8,7 +8,7 @@ case "${1:-}" in
   --check) check_only=true ;;
   *) echo '用法：sudo wanxiang-update [--check]' >&2; exit 2 ;;
 esac
-[[ $# -le 1 && $EUID == 0 && $(uname -m) == x86_64 ]] || { echo '请在上海 Ubuntu 服务器上用 sudo 运行。' >&2; exit 2; }
+[[ $# -le 1 && $EUID == 0 && $(uname -m) == x86_64 ]] || { echo '请在部署测验的 x86_64 Ubuntu 服务器上用 sudo 运行。' >&2; exit 2; }
 
 root=/opt/wanxiang-quiz
 service=wanxiang-quiz.service

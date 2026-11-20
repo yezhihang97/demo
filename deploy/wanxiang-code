@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+import argparse
+import http.client
+import ipaddress
+import json
+import os
+import re
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="为测验订单签发兑换码与访问链接")
+    parser.add_argument("slug", choices=["history", "social", "travel", "creative"])
+    parser.add_argument("order", help="订单编号或自己的测试编号")
+    parser.add_argument("--domain", help="已使用 wanxiang-domain 开通的完整域名")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("请用 sudo 运行")
+
+    gateway = Path("/etc/wanxiang-mobile-preview")
+    invite = None
+    if args.domain:
+        host = args.domain.lower()
+        if not re.fullmatch(r"[a-z0-9.-]{1,253}", host) or not (gateway / "domains.d" / (host + ".conf")).is_file():
+            parser.error("请填写已在本机开通的域名")
+    else:
+        match = re.search(r"^\s*server_name ([0-9.]+);", (gateway / "nginx.conf").read_text(), re.MULTILINE)
+        if not match:
+            parser.error("当前实例尚未配置 IP 内测入口")
+        host = str(ipaddress.IPv4Address(match[1]))
+        invite = (gateway / "invite").read_text().strip()
+
+    config = Path("/etc/wanxiang-quiz/app.env").read_text().splitlines()
+    key = next(line.removeprefix("MERCHANT_KEY=") for line in config if line.startswith("MERCHANT_KEY="))
+    conn = http.client.HTTPConnection("127.0.0.1", 4173, timeout=10)
+    try:
+        conn.request("POST", "/api/merchant/orders", json.dumps({"slug": args.slug, "orderRef": args.order}),
+                     {"Content-Type": "application/json", "Authorization": "Bearer " + key})
+        response = conn.getresponse()
+        result = json.loads(response.read())
+        if response.status != 200:
+            raise SystemExit(result.get("error") or f"签发失败，HTTP {response.status}")
+    finally:
+        conn.close()
+    if invite:
+        print(f"请先打开内测邀请 https://{host}/invite/{invite}")
+    print(f"测验链接 https://{host}{result['path']}")
+    print(f"兑换码 {result['code']}")
+
+
+if __name__ == "__main__":
+    main()

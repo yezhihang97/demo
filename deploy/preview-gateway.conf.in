@@ -1,0 +1,75 @@
+user www-data;
+worker_processes 1;
+pid /run/wanxiang-mobile-preview/nginx.pid;
+error_log stderr warn;
+
+events { worker_connections 512; }
+
+http {
+  access_log off;
+  server_tokens off;
+  map_hash_bucket_size 512;
+  include /etc/wanxiang-mobile-preview/domains.d/*.conf;
+  client_max_body_size 12k;
+  client_body_temp_path /run/wanxiang-mobile-preview/body;
+  proxy_temp_path /run/wanxiang-mobile-preview/proxy;
+  fastcgi_temp_path /run/wanxiang-mobile-preview/fastcgi;
+  uwsgi_temp_path /run/wanxiang-mobile-preview/uwsgi;
+  scgi_temp_path /run/wanxiang-mobile-preview/scgi;
+
+  map $cookie_wx_internal_access $quiz_invited {
+    default 0;
+    "__SESSION_SECRET__" 1;
+  }
+
+  # Compare the real browser origin at the TLS boundary before translating to
+  # the internal HTTP service's origin. The existing local management URL
+  # continues to validate its own origin independently.
+  map $http_origin $quiz_origin {
+    default reject;
+    "" "";
+    "https://__PUBLIC_IP__" "http://127.0.0.1:4173";
+    "https://__PUBLIC_IP__:443" "http://127.0.0.1:4173";
+  }
+
+  server {
+    listen 443 ssl default_server;
+    server_name __PUBLIC_IP__;
+    ssl_certificate /etc/wanxiang-mobile-preview/acme/live/wanxiang-preview-ip/fullchain.pem;
+    ssl_certificate_key /etc/wanxiang-mobile-preview/acme/live/wanxiang-preview-ip/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:quiz_preview_tls:2m;
+
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    if ($host != "__PUBLIC_IP__") { return 404; }
+
+    location = /invite/__INVITE_TOKEN__ {
+      add_header Set-Cookie "wx_internal_access=__SESSION_SECRET__; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=604800" always;
+      add_header Cache-Control "no-store" always;
+      add_header Referrer-Policy no-referrer always;
+      add_header X-Robots-Tag "noindex, nofollow" always;
+      return 303 /;
+    }
+
+    location ~* ^/(manage|api/merchant)(/|$) { return 404; }
+
+    location / {
+      if ($quiz_invited = 0) { return 403; }
+      if ($quiz_origin = reject) { return 403; }
+
+      proxy_pass http://127.0.0.1:4173;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+      proxy_set_header Host 127.0.0.1:4173;
+      proxy_set_header Authorization "";
+      proxy_set_header Origin $quiz_origin;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For "";
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_hide_header Referrer-Policy;
+      proxy_cookie_flags ~ secure;
+      proxy_redirect http://127.0.0.1:4173/ https://__PUBLIC_IP__/;
+    }
+  }
+}

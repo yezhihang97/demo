@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+def run(*args, **kwargs):
+    return subprocess.run(args, check=True, **kwargs)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="为已解析到本机的正式域名配置 HTTPS")
+    parser.add_argument("hostname", nargs="?", help="要启用的完整域名")
+    parser.add_argument("--check", action="store_true", help="仅在本机验证配置模板")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("请用 sudo 运行")
+    host = (args.hostname or ("quiz.example.test" if args.check else "")).lower()
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(host) > 253 or not re.fullmatch(rf"(?:{label}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?", host):
+        parser.error("请输入完整的 DNS 域名，例如 test.example.com。国际化域名使用 Punycode")
+
+    base = Path("/etc/wanxiang-mobile-preview")
+    sites = base / "domains.d"
+    config = base / "nginx.conf"
+    acme = base / "acme"
+    template = Path("/usr/local/share/wanxiang-quiz/domain-site.conf.in").read_text()
+    suffix = hashlib.sha256(host.encode("ascii")).hexdigest()[:16]
+    name = "wanxiang-site-" + suffix
+    dest = sites / (host + ".conf")
+    gateway = "wanxiang-mobile-preview.service"
+    os.umask(0o077)
+    with (base / "config.lock").open("a") as lock, tempfile.TemporaryDirectory(dir=base) as temp:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not sites.is_dir() or f"include {sites}/*.conf;" not in config.read_text():
+            raise SystemExit("当前 HTTPS 入口尚未安装域名配置目录")
+        candidate = Path(temp) / "site.conf"
+
+        def render(cert):
+            candidate.write_text(template.replace("__HOST__", host).replace("__ID__", suffix).replace("__CERT_DIR__", str(cert)))
+
+        # Exercise the actual proxy template without binding ports or asking a CA for a test domain.
+        render(acme / "live/wanxiang-preview-ip")
+        wrapper = Path(temp) / "check.conf"
+        wrapper.write_text(f"events {{}} http {{ map_hash_bucket_size 512; include {candidate}; }}\n")
+        run("nginx", "-q", "-t", "-c", wrapper)
+        if args.check:
+            print("域名 HTTPS 配置预检通过。")
+            return
+
+        previous = dest.read_bytes() if dest.exists() else None
+        if previous is not None and not previous.startswith(b"# Managed by wanxiang-domain\n"):
+            raise SystemExit("域名已有独立配置，请先核对现有配置")
+        run("/opt/wanxiang-mobile-preview/venv/bin/certbot", "certonly", "--standalone", "--non-interactive",
+            "--agree-tos", "--keep-until-expiring", "--preferred-challenges", "http", "--cert-name", name, "-d", host,
+            "--config-dir", acme, "--work-dir", "/var/lib/wanxiang-preview-acme", "--logs-dir", "/var/log/wanxiang-preview-acme")
+        render(acme / "live" / name)
+        candidate.replace(dest)
+        try:
+            run("nginx", "-q", "-t", "-c", config)
+            run("systemctl", "reload", gateway)
+            response = run("curl", "--noproxy", "*", "-fsS", "--retry", "4", "--retry-all-errors", "--retry-delay", "1",
+                           "--max-time", "5", "--resolve", f"{host}:443:127.0.0.1", f"https://{host}/api/health",
+                           capture_output=True)
+            if json.loads(response.stdout) != {"ok": True}:
+                raise RuntimeError("正式域名的服务健康检查失败")
+        except BaseException:
+            if previous is None:
+                dest.unlink()
+            else:
+                candidate.write_bytes(previous)
+                candidate.replace(dest)
+            run("nginx", "-q", "-t", "-c", config)
+            run("systemctl", "reload", gateway)
+            raise
+        print(f"正式网址已启用 https://{host}/")
+
+
+if __name__ == "__main__":
+    main()

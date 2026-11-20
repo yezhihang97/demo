@@ -63,17 +63,47 @@ npm run issue -- history ORDER-001
 
 ### 在腾讯云更新已部署的网站
 
-先把需要上线的前端、后端或加密题库推送到本仓库的 `main` 分支。打开腾讯云轻量应用服务器控制台，登录上海的 Ubuntu 实例，在终端任意目录运行一条命令。
+广州轻量应用服务器每两分钟检查一次本仓库的 `main` 分支。把前端、后端或加密题库的修改提交后，在开发电脑上推送即可触发下一轮上线。
 
 ```sh
-sudo wanxiang-update
+git push origin main
 ```
 
-看到「更新成功」或「已是最新版本」表示网站已在运行 GitHub 对应的版本。重复执行同一版本的更新会检查网站状态。只想提前验证新版本时，可以运行 `sudo wanxiang-update --check`。
+服务器读取公开仓库，构建和验收耗时另计。可以在腾讯云实例终端查看下次检查时间和最近一次部署日志。
+
+```sh
+systemctl list-timers wanxiang-auto-update.timer
+sudo journalctl -u wanxiang-auto-update.service -n 30 --no-pager
+readlink -f /opt/wanxiang-quiz/current
+```
+
+如需立即部署，运行 `sudo wanxiang-update`。也可以用 `sudo wanxiang-update --check` 单独验证。日志中的「更新成功」或「已是最新版本」会列出已上线的提交号。
 
 更新程序从 GitHub 下载指定提交，在独立账户中构建 Vue 前端，使用生产数据库的副本在隔离环境中验证题库、数据库迁移和服务启动。检查通过后切换版本，并重启 `wanxiang-quiz`。正式数据库位于 `/var/lib/wanxiang-quiz/quiz.sqlite`，服务端密钥位于 `/etc/wanxiang-quiz/app.env`。最近一次上线前的 SQLite 在线备份保存在 `/var/backups/wanxiang-quiz/pre-update.sqlite`。启动检查失败会切回原应用版本。涉及数据库结构的更新应同时考虑旧代码对新结构的兼容性。
 
-应用日志可用 `sudo journalctl -u wanxiang-quiz -n 50 --no-pager` 查看。更新工具的源码在 `deploy/wanxiang-update`，服务器上安装的位置是 `/usr/local/sbin/wanxiang-update`。
+应用日志可用 `sudo journalctl -u wanxiang-quiz -n 50 --no-pager` 查看。部署工具、定时任务和域名配置的源码在 `deploy/`。服务器上已安装的运维工具由管理员维护。
+
+### 在广州实例签发兑换码
+
+在腾讯云实例的终端运行以下命令，按需更换主题和订单编号。终端会显示可发给体验者的邀请链接、主题页面与兑换码。重复输入相同主题和订单编号可以取回同一个码。
+
+```sh
+sudo wanxiang-code history TEST-001
+```
+
+主题参数为 `history`（历史人物）、`social`（社交动物）、`travel`（旅行风格）或 `creative`（创作灵感）。内测时，体验者在手机或电脑浏览器先打开邀请链接，再进入主题页兑换。
+
+### 接入正式域名
+
+1. 域名准备好后，在 DNS 平台添加 A 记录，指向广州实例的公网 IPv4。若想用 `test.你的域名`，主机记录填 `test`。使用根域名则填 `@`。
+2. 在腾讯云为中国内地网站完成适用的 ICP 备案，并确认实例防火墙放行 TCP 80 和 443。80 用于证书验证和续期，443 用于网站访问。
+3. 在实例上运行 `sudo wanxiang-domain --check` 可预检 HTTPS 配置。域名解析生效后，将下列示例域名换成自己的完整域名再运行。工具会签发证书、加载配置并检查网站。
+
+```sh
+sudo wanxiang-domain test.example.com
+```
+
+现在可以直接发送 `https://test.example.com/lishirenwu.html` 等主题链接，买家仍凭对应的兑换码答题。运行 `sudo wanxiang-code history ORDER-001 --domain test.example.com` 可生成使用该域名的发货信息。如需同时启用根域名和 `www`，分别配置 A 记录并为两个完整域名各运行一次开通命令。证书由 `wanxiang-preview-renew.timer` 定期续期。
 
 ### 维护题库
 

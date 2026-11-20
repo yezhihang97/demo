@@ -1,0 +1,9 @@
+[Unit]
+Description=Check GitHub main and deploy the Wanxiang Quiz release
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wanxiang-update
+TimeoutStartSec=30min
