@@ -61,6 +61,20 @@ npm run issue -- history ORDER-001
 
 项目还包含 Sites 私有预览适配器。`npm run build` 会同时生成 Vue 静态文件与托管 Worker。Worker 产物包含加密题库，运行时从托管 Secret 读取 `QUIZ_BANK_KEY` 与 `MERCHANT_KEY`，使用 D1 保存数据。托管预览和本地服务各自维护订单、兑换码和进度。
 
+### 在腾讯云更新已部署的网站
+
+先把需要上线的前端、后端或加密题库推送到本仓库的 `main` 分支。打开腾讯云轻量应用服务器控制台，登录上海的 Ubuntu 实例，在终端任意目录运行一条命令。
+
+```sh
+sudo wanxiang-update
+```
+
+看到「更新成功」或「已是最新版本」表示网站已在运行 GitHub 对应的版本。重复执行同一版本的更新会检查网站状态。只想提前验证新版本时，可以运行 `sudo wanxiang-update --check`。
+
+更新程序从 GitHub 下载指定提交，在独立账户中构建 Vue 前端，使用生产数据库的副本在隔离环境中验证题库、数据库迁移和服务启动。检查通过后切换版本，并重启 `wanxiang-quiz`。正式数据库位于 `/var/lib/wanxiang-quiz/quiz.sqlite`，服务端密钥位于 `/etc/wanxiang-quiz/app.env`。最近一次上线前的 SQLite 在线备份保存在 `/var/backups/wanxiang-quiz/pre-update.sqlite`。启动检查失败会切回原应用版本。涉及数据库结构的更新应同时考虑旧代码对新结构的兼容性。
+
+应用日志可用 `sudo journalctl -u wanxiang-quiz -n 50 --no-pager` 查看。更新工具的源码在 `deploy/wanxiang-update`，服务器上安装的位置是 `/usr/local/sbin/wanxiang-update`。
+
 ### 维护题库
 
 在持有正式密钥的机器上运行 `npm run bank:export`，将题库解密到 Git 忽略的 `backend/content-work/`。编辑对应主题后运行 `npm run bank:pack`。工具校验题号、选项、画像映射，再为变化的主题生成新的随机 IV 并保存密文。保持已发布题号与选项 ID 稳定，可让未完成的答卷接续。每次更新后运行测试和构建，重启对应服务。

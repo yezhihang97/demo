@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Update an existing Wanxiang Quiz Lighthouse installation.
+set -euo pipefail
+umask 022
+
+case "${1:-}" in
+  '') check_only=false ;;
+  --check) check_only=true ;;
+  *) echo '用法：sudo wanxiang-update [--check]' >&2; exit 2 ;;
+esac
+[[ $# -le 1 && $EUID == 0 && $(uname -m) == x86_64 ]] || { echo '请在上海 Ubuntu 服务器上用 sudo 运行。' >&2; exit 2; }
+
+root=/opt/wanxiang-quiz
+service=wanxiang-quiz.service
+config=/etc/wanxiang-quiz/app.env
+database=/var/lib/wanxiang-quiz/quiz.sqlite
+backups=/var/backups/wanxiang-quiz
+repo=yezhihang97/demo
+runtime=node-v24.22.3-linux-x64
+runtime_hash=4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+toolchain="$root/toolchain/$runtime"
+cache=/var/cache/wanxiang-quiz-build
+fetch=(curl --disable --proto '=https' --proto-redir '=https' -fsSL --connect-timeout 10 --max-time 150 --retry 2)
+isolated=(systemd-run --quiet --wait --pipe --collect -p DynamicUser=yes -p ProtectHome=yes -p PrivateTmp=yes -p NoNewPrivileges=yes)
+
+[[ -L $root/current && -r $config && -f $database ]] || { echo '未找到已有的测验服务或数据库。' >&2; exit 1; }
+exec 9>"$root/deploy.lock"
+flock --exclusive 9
+previous=$(readlink -e "$root/current")
+health() {
+  systemctl is-active --quiet "$service" &&
+    [[ $(curl -fsS --max-time 2 http://127.0.0.1:4173/api/health 2>/dev/null) == '{"ok":true}' ]] &&
+    curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:4173/
+}
+
+echo '正在读取 GitHub main 的版本…'
+commit=$("${fetch[@]}" "https://api.github.com/repos/$repo/git/ref/heads/main" |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["object"]["sha"])')
+[[ $commit =~ ^[a-f0-9]{40}$ ]] || { echo 'GitHub 返回的版本号无效。' >&2; exit 1; }
+release="$root/releases/$commit"
+if ! $check_only && [[ $previous == "$release" ]] && health; then
+  echo "已是最新版本 ${commit:0:12}，网站运行正常。"
+  exit 0
+fi
+
+work=$(mktemp -d "$root/releases/.update.XXXXXXXX")
+build="$cache/${work##*/}"
+rollback=false
+switch_to() {
+  ln -sfnT -- "$1" "$work/next"
+  mv -Tf -- "$work/next" "$root/current"
+}
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if $rollback; then
+    echo '新版未通过上线检查，正在切回原版本。' >&2
+    switch_to "$previous"
+    systemctl restart "$service" || echo '请用 journalctl -u wanxiang-quiz 查看启动日志。' >&2
+  fi
+  rm -rf -- "$work" "$build"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+chmod 0711 "$work"
+
+if [[ ! -x $toolchain/bin/npm ]]; then
+  "${fetch[@]}" "https://nodejs.org/dist/v24.22.3/$runtime.tar.xz" -o "$work/node.tar.xz"
+  (cd "$work" && printf '%s  node.tar.xz\n' "$runtime_hash" | sha256sum --check --status)
+  tar -xJf "$work/node.tar.xz" --no-same-owner -C "$work"
+  install -d "$root/toolchain"
+  mv -T -- "$work/$runtime" "$toolchain"
+fi
+
+candidate="$release"
+if [[ ! -d $release ]]; then
+  echo "正在构建 ${commit:0:12} 的 Vue 页面和 Node.js 服务…"
+  "${fetch[@]}" "https://codeload.github.com/$repo/tar.gz/$commit" -o "$work/source.tgz"
+  "${isolated[@]}" -p User=wanxiang-build -p CacheDirectory=wanxiang-quiz-build -p CacheDirectoryMode=0700 \
+    --setenv="HOME=$cache" --setenv="PATH=$toolchain/bin:/usr/bin:/bin" /bin/bash -euc '
+      mkdir "$1"
+      cd "$1"
+      tar -xzf "$2" --strip-components=1 --no-same-owner
+      npm ci --no-audit --no-fund
+      npm run build:frontend
+      npm prune --omit=dev --ignore-scripts --no-audit --no-fund
+      test -s frontend/dist/index.html
+    ' build "$build" "$work/source.tgz"
+  candidate="$work/release"
+  mkdir "$candidate"
+  rsync -rlp --safe-links --chmod=u=rwX,go=rX \
+    --exclude='/.git*' --exclude='/.env*' --exclude='/backend/data/' --exclude='/backend/content-work/' \
+    "$build/" "$candidate/"
+  ln -s -- "$toolchain/bin/node" "$candidate/node"
+fi
+
+echo '正在使用数据库副本验证题库、答题流程和服务启动…'
+(umask 077; python3 - "$database" "$work/before.sqlite" <<'PY'
+import sqlite3
+import sys
+
+with sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True) as source, sqlite3.connect(sys.argv[2]) as copy:
+    source.backup(copy)
+PY
+)
+"${isolated[@]}" -p PrivateNetwork=yes -p "EnvironmentFile=$config" -p UnsetEnvironment=MERCHANT_KEY \
+  --working-directory="$candidate" /bin/bash -euc '
+    export DATABASE_PATH=/tmp/wanxiang-check.sqlite MERCHANT_KEY=isolated-update-check
+    cat > "$DATABASE_PATH"
+    ./node --test backend/test/*.test.mjs
+    ./node scripts/start.mjs &
+    app=$!
+    trap "kill $app 2>/dev/null || true" EXIT
+    for ((i=0; i<30; i++)); do
+      kill -0 "$app" || exit 1
+      if [[ $(curl -fsS --max-time 2 http://127.0.0.1:4173/api/health 2>/dev/null) == "{\"ok\":true}" ]] &&
+         curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:4173/; then exit 0; fi
+      sleep 1
+    done
+    exit 1
+  ' < "$work/before.sqlite"
+
+if $check_only; then
+  echo "检查通过 ${commit:0:12}。"
+  exit 0
+fi
+install -d -m 0700 "$backups"
+install -m 0600 "$work/before.sqlite" "$backups/.pre-update.sqlite"
+mv -Tf -- "$backups/.pre-update.sqlite" "$backups/pre-update.sqlite"
+if [[ $candidate != "$release" ]]; then mv -T -- "$candidate" "$release"; fi
+rollback=true
+switch_to "$release"
+systemctl restart "$service"
+for ((i=0; i<30; i++)); do
+  if health; then
+    rollback=false
+    echo "更新成功 ${commit:0:12}，网站运行正常。"
+    exit 0
+  fi
+  sleep 1
+done
+exit 1
