@@ -3,10 +3,10 @@
 set -euo pipefail
 umask 022
 
-case "${1:-}" in
-  '') check_only=false ;;
-  --check) check_only=true ;;
-  *) echo '用法：sudo wanxiang-update [--check]' >&2; exit 2 ;;
+mode=${1:-}
+case "$mode" in
+  ''|--status|--check) ;;
+  *) echo '用法：sudo wanxiang-update [--status | --check]' >&2; exit 2 ;;
 esac
 [[ $# -le 1 && $EUID == 0 && $(uname -m) == x86_64 ]] || { echo '请在部署测验的 x86_64 Ubuntu 服务器上用 sudo 运行。' >&2; exit 2; }
 
@@ -34,11 +34,22 @@ health() {
 }
 
 echo '正在读取 GitHub main 的版本…'
-commit=$("${fetch[@]}" "https://api.github.com/repos/$repo/git/ref/heads/main" |
+commit=$("${fetch[@]}" -H 'Cache-Control: no-cache' "https://api.github.com/repos/$repo/git/ref/heads/main" |
   python3 -c 'import json, sys; print(json.load(sys.stdin)["object"]["sha"])')
 [[ $commit =~ ^[a-f0-9]{40}$ ]] || { echo 'GitHub 返回的版本号无效。' >&2; exit 1; }
 release="$root/releases/$commit"
-if ! $check_only && [[ $previous == "$release" ]] && health; then
+if [[ $mode == --status ]]; then
+  printf '当前线上版本 %s\nGitHub main 版本 %s\n' "${previous##*/}" "$commit"
+  if [[ $previous == "$release" ]]; then
+    echo '已是最新版本。'
+  else
+    echo '有待部署的提交。准备上线时请运行 sudo wanxiang-update。'
+  fi
+  health || { echo '当前网站健康检查失败。' >&2; exit 1; }
+  echo '网站运行正常。'
+  exit 0
+fi
+if [[ -z $mode && $previous == "$release" ]] && health; then
   echo "已是最新版本 ${commit:0:12}，网站运行正常。"
   exit 0
 fi
@@ -122,7 +133,7 @@ PY
     exit 1
   ' < "$work/before.sqlite"
 
-if $check_only; then
+if [[ $mode == --check ]]; then
   echo "检查通过 ${commit:0:12}。"
   exit 0
 fi

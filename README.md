@@ -63,25 +63,29 @@ npm run issue -- history ORDER-001
 
 ### 在腾讯云更新已部署的网站
 
-广州轻量应用服务器每两分钟检查一次本仓库的 `main` 分支。把前端、后端或加密题库的修改提交后，在开发电脑上推送即可触发下一轮上线。
+广州轻量应用服务器使用手动部署。先在开发电脑提交修改，再推送到本仓库的 `main` 分支。
 
 ```sh
 git push origin main
 ```
 
-服务器读取公开仓库，构建和验收耗时另计。可以在腾讯云实例终端查看下次检查时间和最近一次部署日志。
+准备更新时，打开腾讯云广州实例的终端，查看线上版本、GitHub 最新提交和当前网站的运行状态。这一步只查询版本和健康状态。
 
 ```sh
-systemctl list-timers wanxiang-auto-update.timer
-sudo journalctl -u wanxiang-auto-update.service -n 30 --no-pager
-readlink -f /opt/wanxiang-quiz/current
+sudo wanxiang-update --status
 ```
 
-如需立即部署，运行 `sudo wanxiang-update`。也可以用 `sudo wanxiang-update --check` 单独验证。日志中的「更新成功」或「已是最新版本」会列出已上线的提交号。
+确认要上线时，在同一终端运行下面的命令。服务器会拉取执行时 `main` 的最新版本，完成后显示上线的提交号。之后可再次运行 `--status` 核对。
+
+```sh
+sudo wanxiang-update
+```
+
+如需提前演练一次完整构建和测试，可以运行 `sudo wanxiang-update --check`。日常查看是否有新提交使用 `--status` 即可。
 
 更新程序从 GitHub 下载指定提交，在独立账户中构建 Vue 前端，使用生产数据库的副本在隔离环境中验证题库、数据库迁移和服务启动。检查通过后切换版本，并重启 `wanxiang-quiz`。正式数据库位于 `/var/lib/wanxiang-quiz/quiz.sqlite`，服务端密钥位于 `/etc/wanxiang-quiz/app.env`。最近一次上线前的 SQLite 在线备份保存在 `/var/backups/wanxiang-quiz/pre-update.sqlite`。启动检查失败会切回原应用版本。涉及数据库结构的更新应同时考虑旧代码对新结构的兼容性。
 
-应用日志可用 `sudo journalctl -u wanxiang-quiz -n 50 --no-pager` 查看。部署工具、定时任务和域名配置的源码在 `deploy/`。服务器上已安装的运维工具由管理员维护。
+应用日志可用 `sudo journalctl -u wanxiang-quiz -n 50 --no-pager` 查看。部署工具和域名配置的源码在 `deploy/`。服务器上已安装的运维工具由管理员维护。
 
 ### 在广州实例签发兑换码
 
